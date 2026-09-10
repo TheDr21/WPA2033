@@ -1,0 +1,52 @@
+name: Rebuild dashboard
+
+# Anyone with write access can drop a box score PDF into
+# data/raw/boxscores/ through the GitHub web UI. This reparses everything
+# and commits the refreshed site. No local setup needed.
+on:
+  push:
+    paths:
+      - "data/raw/boxscores/**"
+      - "data/game_meta.csv"
+      - "scripts/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      - name: Parse box scores
+        run: |
+          shopt -s nullglob
+          pdfs=(data/raw/boxscores/*.pdf)
+          if [ ${#pdfs[@]} -eq 0 ]; then echo "no box scores yet"; exit 0; fi
+          python3 scripts/parse_boxscore.py "${pdfs[@]}" --outdir data/
+
+      - name: Seed any new games in game_meta.csv
+        run: python3 scripts/sync_meta.py
+
+      - name: Build dashboard
+        run: |
+          python3 scripts/build_dashboard.py \
+            --team "${{ vars.TEAM_KEY || 'LadyDukesWPA2033' }}" \
+            --label "${{ vars.TEAM_LABEL || 'Lady Dukes WPA 2033' }}" \
+            --outdir docs/
+
+      - name: Commit if anything changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/games.csv data/batting_by_game.csv data/pitching_by_game.csv \
+                  data/game_meta.csv docs/index.html
+          git diff --staged --quiet || git commit -m "Rebuild dashboard [skip ci]"
+          git push

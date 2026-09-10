@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+
+# Our own roster CSVs carry full first names. Box scores don't.
+data/raw/gc_csv/
+data/by_game/

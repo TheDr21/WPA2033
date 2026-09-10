@@ -1,0 +1,5 @@
+game_id,date,team,opponent,site,R,H,E,RA,HA,EA,result,innings,by_inning
+2026-09-06_LadyDukesWPA2033_vs_LadyDukesWPABlue12U,2026-09-06,LadyDukesWPA2033,LadyDukesWPABlue12U,Away,5,6,3,6,3,1,L,5,0-0-3-2-0
+2026-09-06_LadyDukesWPA2033_vs_LadyDukesWPABlue12U,2026-09-06,LadyDukesWPABlue12U,LadyDukesWPA2033,Home,6,3,1,5,6,3,W,5,0-0-0-0-6
+2026-09-06_LadyDukesWPABlue12U_vs_LadyDukesWPA2033,2026-09-06,LadyDukesWPABlue12U,LadyDukesWPA2033,Home,16,8,0,2,0,7,W,4,4-9-1-2
+2026-09-06_LadyDukesWPABlue12U_vs_LadyDukesWPA2033,2026-09-06,LadyDukesWPA2033,LadyDukesWPABlue12U,Away,2,0,7,16,8,0,L,4,0-0-0-2
