@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Post a game — Lady Dukes WPA 2033</title>
+<link rel="icon" href="logo.png" type="image/png">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,400;0,500;0,600;0,800;1,400&display=swap" rel="stylesheet">
+<style>
+  :root { --ink:#08090c; --panel:#10131a; --rule:#1f2532; --chalk:#f2f4f8;
+          --dim:#7c8598; --brand:#1b40ca; --royal:#5b81ff; --seam:#e2574a; --go:#3fbf7f; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--ink); color:var(--chalk); font-size:16px; line-height:1.5;
+         font-family:Archivo,"Helvetica Neue",Arial,sans-serif; }
+  .wrap { max-width:38rem; margin:0 auto; padding:clamp(1rem,4vw,2.5rem); }
+  .crest { display:flex; align-items:center; gap:1rem; }
+  .crest img { width:64px; height:auto; }
+  h1 { font-size:1.6rem; font-weight:800; letter-spacing:-0.025em; margin:0; }
+  .season { color:var(--dim); font-size:0.88rem; font-style:italic; }
+  h2 { font-size:0.95rem; font-weight:600; margin:2rem 0 0.5rem; }
+  p.note { color:var(--dim); font-size:0.86rem; margin:0 0 1rem; }
+  label { display:block; font-size:0.82rem; color:var(--dim); margin-bottom:0.3rem; }
+  input[type=password], input[type=text] {
+    width:100%; font:inherit; font-size:0.9rem; color:var(--chalk); background:var(--panel);
+    border:1px solid var(--rule); padding:0.55rem 0.7rem; }
+  input:focus-visible { outline:2px solid var(--royal); outline-offset:1px; }
+  .row { display:flex; gap:0.5rem; align-items:flex-end; }
+  .row > div { flex:1; min-width:0; }
+  button { font:inherit; font-size:0.88rem; font-weight:600; color:#fff; background:var(--brand);
+           border:1px solid var(--brand); padding:0.55rem 1.1rem; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--chalk); border-color:var(--rule); font-weight:400; }
+  button:disabled { opacity:0.45; cursor:default; }
+  button:focus-visible { outline:2px solid var(--royal); outline-offset:2px; }
+  #drop { border:1px dashed var(--rule); background:var(--panel); padding:2rem 1rem; text-align:center;
+          color:var(--dim); font-size:0.9rem; cursor:pointer; }
+  #drop.over { border-color:var(--royal); color:var(--chalk); }
+  #drop.has { border-style:solid; color:var(--chalk); }
+  ul.files { list-style:none; padding:0; margin:0.8rem 0 0; font-size:0.86rem; }
+  ul.files li { display:flex; justify-content:space-between; gap:0.7rem; padding:0.4rem 0;
+                border-top:1px solid var(--rule); }
+  .ok { color:var(--go); } .bad { color:var(--seam); } .dim { color:var(--dim); }
+  #log { font-size:0.85rem; margin-top:1.2rem; }
+  #log div { padding:0.3rem 0; border-top:1px solid var(--rule); }
+  footer { margin-top:2.5rem; padding-top:1rem; border-top:1px solid var(--rule);
+           color:var(--dim); font-size:0.78rem; }
+  a { color:var(--royal); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="crest">
+    <img src="logo.png" alt="" width="512" height="512">
+    <div><h1>Post a game</h1><div class="season">Box score straight into the repo</div></div>
+  </div>
+
+  <h2>Access</h2>
+  <p class="note">A fine-grained GitHub token scoped to <b>WPA2033</b> with Contents:
+    read and write. It's kept in this browser only and never leaves it except to
+    talk to GitHub. Nothing on this page works without one.</p>
+  <div class="row">
+    <div>
+      <label for="tok">Token</label>
+      <input id="tok" type="password" placeholder="github_pat_… or ghp_…" autocomplete="off" spellcheck="false">
+    </div>
+    <button id="save" class="ghost">Remember</button>
+    <button id="forget" class="ghost">Forget</button>
+  </div>
+  <div id="who" class="note" style="margin-top:0.6rem"></div>
+
+  <h2>Box score</h2>
+  <p class="note">The PDF straight out of GameChanger. <b>Do not rename it</b> — the
+    date and both team names are read out of the filename.</p>
+  <div id="drop" tabindex="0" role="button">Drop PDFs here, or tap to choose</div>
+  <input id="pick" type="file" accept="application/pdf" multiple hidden>
+  <ul class="files" id="files"></ul>
+
+  <p style="margin-top:1.2rem"><button id="go" disabled>Post to repo</button></p>
+  <div id="log"></div>
+
+  <footer>
+    This page is unlisted, not private — anything committed lands in a public repo.
+    <a href="index.html">Back to the dashboard</a>
+  </footer>
+</div>
+
+<script>
+const REPO = "TheDr21/WPA2033", DIR = "data/raw/boxscores";
+const NAME_RE = /^.+_vs_.+_(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)_\d{1,2}_\d{4}\.pdf$/i;
+const $ = id => document.getElementById(id);
+let queue = [];
+
+const tokenOf = () => $("tok").value.trim() || localStorage.getItem("wpa2033_tok") || "";
+const api = (path, opts = {}) => fetch("https://api.github.com" + path, Object.assign({
+  headers: { Authorization: "Bearer " + tokenOf(), Accept: "application/vnd.github+json" }
+}, opts));
+
+function say(msg, cls) { $("log").insertAdjacentHTML("beforeend",
+  `<div class="${cls || ""}">${msg}</div>`); }
+
+/* ---- token ---- */
+const stored = localStorage.getItem("wpa2033_tok");
+if (stored) { $("tok").value = stored; checkWho(); }
+$("save").onclick = () => {
+  localStorage.setItem("wpa2033_tok", $("tok").value.trim()); checkWho();
+};
+$("forget").onclick = () => {
+  localStorage.removeItem("wpa2033_tok"); $("tok").value = "";
+  $("who").textContent = "Token cleared from this browser.";
+};
+async function checkWho() {
+  if (!tokenOf()) return;
+  $("who").textContent = "Checking…";
+  try {
+    const r = await api("/user");
+    if (!r.ok) throw new Error(r.status === 401 ? "Token rejected" : "HTTP " + r.status);
+    const u = await r.json();
+    $("who").innerHTML = `Signed in as <b>${u.login}</b>.`;
+    $("who").className = "note ok"; refresh();
+  } catch (e) { $("who").textContent = e.message; $("who").className = "note bad"; }
+}
+$("tok").addEventListener("change", checkWho);
+
+/* ---- file queue ---- */
+const drop = $("drop");
+drop.onclick = () => $("pick").click();
+drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("pick").click(); } };
+["dragenter", "dragover"].forEach(t => drop.addEventListener(t, e => {
+  e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(t => drop.addEventListener(t, e => {
+  e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => add([...e.dataTransfer.files]));
+$("pick").addEventListener("change", e => add([...e.target.files]));
+
+function add(list) {
+  list.filter(f => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"))
+      .forEach(f => { if (!queue.some(q => q.name === f.name)) queue.push(f); });
+  refresh();
+}
+function refresh() {
+  drop.classList.toggle("has", queue.length > 0);
+  drop.textContent = queue.length ? `${queue.length} file${queue.length > 1 ? "s" : ""} ready`
+                                  : "Drop PDFs here, or tap to choose";
+  $("files").innerHTML = queue.map(f => {
+    const good = NAME_RE.test(f.name);
+    return `<li><span>${f.name}</span><span class="${good ? "ok" : "bad"}">${
+      good ? (f.size / 1024).toFixed(0) + " KB" : "name won't parse"}</span></li>`;
+  }).join("");
+  $("go").disabled = !queue.length || !tokenOf() || !queue.every(f => NAME_RE.test(f.name));
+}
+
+const b64 = f => new Promise((res, rej) => {
+  const r = new FileReader();
+  r.onload = () => res(r.result.split(",")[1]);
+  r.onerror = () => rej(new Error("Could not read " + f.name));
+  r.readAsDataURL(f);
+});
+
+/* ---- commit ---- */
+$("go").onclick = async () => {
+  $("go").disabled = true; $("log").innerHTML = "";
+  try {
+    for (const f of queue) {
+      say(`Uploading ${f.name}…`, "dim");
+      const path = `${DIR}/${f.name}`;
+      /* An existing path needs its SHA or the API returns a conflict. */
+      let sha;
+      const cur = await api(`/repos/${REPO}/contents/${encodeURI(path)}`);
+      if (cur.ok) sha = (await cur.json()).sha;
+      const body = { message: `Add box score ${f.name}`, content: await b64(f) };
+      if (sha) { body.sha = sha; body.message = `Update box score ${f.name}`; }
+      const put = await api(`/repos/${REPO}/contents/${encodeURI(path)}`,
+        { method: "PUT", body: JSON.stringify(body) });
+      if (!put.ok) throw new Error(`${f.name}: ${(await put.json()).message}`);
+      say(`Committed ${f.name}${sha ? " (replaced)" : ""}`, "ok");
+    }
+    queue = []; refresh();
+    say("Rebuilding the dashboard…", "dim");
+    await watch();
+  } catch (e) {
+    say(e.message, "bad"); $("go").disabled = false;
+  }
+};
+
+/* ---- watch the Action finish ---- */
+async function watch() {
+  const started = Date.now();
+  for (let i = 0; i < 40; i++) {
+    await new Promise(r => setTimeout(r, 5000));
+    const r = await api(`/repos/${REPO}/actions/runs?per_page=5`);
+    if (!r.ok) break;
+    const run = (await r.json()).workflow_runs
+      .find(x => x.name === "Rebuild dashboard" && new Date(x.created_at) > started - 120000);
+    if (!run) continue;
+    if (run.status !== "completed") continue;
+    if (run.conclusion === "success") {
+      say(`Done in ${Math.round((Date.now() - started) / 1000)}s. ` +
+          `<a href="index.html">Open the dashboard</a> ` +
+          `<span class="dim">(hard-refresh if it looks stale)</span>`, "ok");
+    } else {
+      say(`Build finished as "${run.conclusion}". <a href="${run.html_url}">See the log</a>`, "bad");
+    }
+    $("go").disabled = false;
+    return;
+  }
+  say(`Still building. <a href="https://github.com/${REPO}/actions">Watch it here</a>`, "dim");
+  $("go").disabled = false;
+}
+</script>
+</body>
+</html>

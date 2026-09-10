@@ -131,6 +131,27 @@ TEMPLATE = r"""<!doctype html>
   table.stat tfoot td { border-bottom: none; border-top: 2px solid var(--rule); font-weight: 600; }
   .empty { color: var(--dim); padding: 1.3rem 0; max-width: 52ch; text-align: left; }
 
+  .lineup-grid { display: grid; gap: 1rem; grid-template-columns: minmax(0,1.6fr) minmax(0,1fr);
+                 align-items: start; }
+  @media (max-width: 46rem) { .lineup-grid { grid-template-columns: 1fr; } }
+  #order { min-width: 0; }
+  #order td.slot { color: var(--dim); width: 1%; }
+  #order .move { display: flex; gap: 0.2rem; justify-content: flex-end; }
+  #order .move button { font: inherit; font-size: 0.72rem; line-height: 1; color: var(--chalk);
+    background: transparent; border: 1px solid var(--rule); padding: 0.2rem 0.4rem; cursor: pointer; }
+  #order .move button:hover:not(:disabled) { border-color: var(--royal); }
+  #order .move button:disabled { opacity: 0.3; cursor: default; }
+  #order .move button:focus-visible { outline: 2px solid var(--royal); outline-offset: 1px; }
+  #order tr.benched td { opacity: 0.42; }
+  #order .sit { color: var(--dim); }
+  #proj .big { font-size: 2.1rem; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; }
+  #proj .big span { font-size: 0.85rem; font-weight: 400; color: var(--dim); letter-spacing: 0; }
+  #proj ul { list-style: none; padding: 0; margin: 0.9rem 0 0; font-size: 0.85rem; }
+  #proj li { display: flex; justify-content: space-between; gap: 0.7rem; padding: 0.25rem 0;
+             border-top: 1px solid var(--rule); }
+  #proj li b { font-weight: 600; }
+  #proj .hint { color: var(--dim); font-size: 0.8rem; margin-top: 0.9rem; line-height: 1.45; }
+
   footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--rule);
            color: var(--dim); font-size: 0.8rem; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -175,6 +196,16 @@ TEMPLATE = r"""<!doctype html>
   <div class="scroll"><table class="stat" id="pit"></table></div>
 </section>
 
+<section id="tab-lineup" hidden>
+  <h2>Lineup projection</h2>
+  <p class="note" id="lineup-note"></p>
+  <div class="filter" id="lineup-scope"></div>
+  <div class="lineup-grid">
+    <div><table class="stat" id="order"></table></div>
+    <div class="card" id="proj"></div>
+  </div>
+</section>
+
 <section id="tab-opponents" hidden>
   <h2>Opponents faced</h2>
   <p class="note">Built from the same box scores as our own numbers, so it fills
@@ -195,7 +226,7 @@ const pct = v => (v === null || v === undefined || !isFinite(v)) ? "\u2013" : Ma
 
 /* ---------------- tabs ---------------- */
 const TABS = [["overview", "Overview"], ["games", "Games"], ["batting", "Batting"],
-              ["pitching", "Pitching"], ["opponents", "Opponents"]];
+              ["pitching", "Pitching"], ["lineup", "Lineup"], ["opponents", "Opponents"]];
 const nav = document.getElementById("tabs");
 nav.innerHTML = TABS.map(([id, t]) => `<a href="#${id}" data-t="${id}">${t}</a>`).join("");
 function showTab(id) {
@@ -491,6 +522,151 @@ function renderPit(scope) {
       <td>${b}</td><td>${p}</td></tr>`;
   }).join("")}</tbody>`;
 })();
+
+
+/* ---------------- lineup projection ---------------- */
+/* A Monte Carlo over the order. Each batter's per-PA outcome rates come from
+   their own line, regressed toward the team rate -- with 20-odd plate
+   appearances on file, raw rates would swing the projection wildly on one
+   lucky double. PRIOR is the weight of that regression in PA. */
+const PRIOR = 25, INNINGS = 6, SIMS = 1500;
+let LSCOPE = "all", ORDER = null, SITTING = new Set();
+
+function batterRates(scope) {
+  const rows = agg(
+    D.batting.filter(r => r.team === US && inScope(r.game_id, scope)),
+    ["AB", "H", "BB", "SO", "HBP", "SF", "RBI", "R"],
+    (a, r) => a.XBH = (a.XBH || 0) + (r["2B"] || 0) + (r["3B"] || 0) + (r.HR || 0)
+  );
+  const T = rows.reduce((t, a) => {
+    ["AB", "H", "BB", "HBP", "SF"].forEach(k => t[k] += a[k] || 0);
+    t.XBH += a.XBH || 0; return t;
+  }, { AB: 0, H: 0, BB: 0, HBP: 0, SF: 0, XBH: 0 });
+  const tPA = T.AB + T.BB + T.HBP + T.SF || 1;
+  const tm = { bb: (T.BB + T.HBP) / tPA, xbh: T.XBH / tPA, s1: (T.H - T.XBH) / tPA };
+
+  return rows.map(a => {
+    const pa = a.AB + a.BB + a.HBP + a.SF;
+    const mix = (own, team) => (own + team * PRIOR) / (pa + PRIOR);
+    const bb = mix(a.BB + a.HBP, tm.bb);
+    const xbh = mix(a.XBH || 0, tm.xbh);
+    const s1 = mix(a.H - (a.XBH || 0), tm.s1);
+    return { jersey: a.jersey, player: a.player, PA: pa,
+             obp: pa ? (a.H + a.BB + a.HBP) / pa : 0,
+             bb, s1, xbh, out: Math.max(0, 1 - bb - s1 - xbh) };
+  }).filter(r => r.PA > 0);
+}
+
+function simulate(order) {
+  if (!order.length) return { rpg: 0, dist: {} };
+  let total = 0, spot = 0;
+  const scores = [];
+  for (let g = 0; g < SIMS; g++) {
+    let runs = 0; spot = 0;
+    for (let inn = 0; inn < INNINGS; inn++) {
+      let outs = 0, b = [0, 0, 0];   /* occupancy of 1st, 2nd, 3rd */
+      while (outs < 3) {
+        const p = order[spot % order.length]; spot++;
+        const r = Math.random();
+        if (r < p.bb + p.s1) {                 /* walk or single: force one */
+          runs += b[2]; b[2] = b[1]; b[1] = b[0]; b[0] = 1;
+        } else if (r < p.bb + p.s1 + p.xbh) {  /* extra-base: clear two bases */
+          runs += b[2] + b[1]; b[2] = b[0]; b[1] = 1; b[0] = 0;
+        } else outs++;
+      }
+    }
+    total += runs; scores.push(runs);
+  }
+  scores.sort((a, b) => a - b);
+  return { rpg: total / SIMS,
+           lo: scores[Math.floor(SIMS * 0.15)],
+           hi: scores[Math.floor(SIMS * 0.85)] };
+}
+
+function bestOrder(pool) {
+  /* Greedy: highest on-base first is the standard heuristic and beats
+     hand-sorting almost every time at this level. */
+  return [...pool].sort((a, b) => (b.bb + b.s1 + b.xbh) - (a.bb + a.s1 + a.xbh));
+}
+
+function renderLineup() {
+  const pool = batterRates(LSCOPE);
+  const el = document.getElementById("order"), pr = document.getElementById("proj");
+  if (!pool.length) {
+    el.innerHTML = `<caption class="empty">No batters in this scope yet.</caption>`;
+    pr.innerHTML = ""; return;
+  }
+  if (!ORDER || ORDER.some(j => !pool.find(p => p.jersey === j))
+             || pool.some(p => ORDER.indexOf(p.jersey) === -1)) {
+    ORDER = bestOrder(pool).map(p => p.jersey);
+    SITTING = new Set();
+  }
+  const byJ = Object.fromEntries(pool.map(p => [p.jersey, p]));
+  const active = ORDER.filter(j => !SITTING.has(j)).map(j => byJ[j]);
+
+  el.innerHTML = `<thead><tr><th class="slot">#</th><th class="who">Batter</th>
+    <th>PA</th><th>OBP</th><th>XBH rate</th><th></th></tr></thead>
+  <tbody>${ORDER.map((j, i) => {
+    const p = byJ[j], sat = SITTING.has(j);
+    const slot = sat ? "\u2013" : active.findIndex(a => a.jersey === j) + 1;
+    return `<tr class="${sat ? "benched" : ""}">
+      <td class="slot">${slot}</td>
+      <td class="who">${p.player} <span class="sit">#${p.jersey}</span></td>
+      <td>${p.PA}</td><td>${rate(p.obp)}</td><td>${pct(p.xbh)}</td>
+      <td class="move">
+        <button type="button" data-up="${i}" ${i === 0 ? "disabled" : ""} aria-label="Move ${p.player} up">\u2191</button>
+        <button type="button" data-down="${i}" ${i === ORDER.length - 1 ? "disabled" : ""} aria-label="Move ${p.player} down">\u2193</button>
+        <button type="button" data-sit="${j}" aria-label="${sat ? "Add" : "Bench"} ${p.player}">${sat ? "in" : "sit"}</button>
+      </td></tr>`;
+  }).join("")}</tbody>`;
+
+  const mine = simulate(active);
+  const opt = simulate(bestOrder(active));
+  const gain = opt.rpg - mine.rpg;
+  pr.innerHTML = `<h3>Projected offense</h3>
+    <div class="sub">${SIMS.toLocaleString()} simulated ${INNINGS}-inning games</div>
+    <div class="big">${mine.rpg.toFixed(1)} <span>runs per game</span></div>
+    <ul>
+      <li><span>Typical range</span><b>${mine.lo}\u2013${mine.hi}</b></li>
+      <li><span>Batting ${active.length}</span><b>${active.length ? active[0].player : "\u2013"} leading off</b></li>
+      <li><span>Best on-base order</span><b>${opt.rpg.toFixed(1)}</b></li>
+      <li><span>On the table</span><b class="${gain > 0.3 ? "flag" : ""}">${gain > 0 ? "+" : ""}${gain.toFixed(1)}</b></li>
+    </ul>
+    <p class="hint">Rates are regressed toward the team average using a ${PRIOR}-PA
+      prior, so nobody's projection swings on one lucky double. The gap between
+      your order and the on-base order is usually under a run \u2014 lineup order
+      matters far less than who is in it.</p>`;
+}
+
+document.getElementById("order").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.up !== undefined) {
+    const i = +b.dataset.up; [ORDER[i - 1], ORDER[i]] = [ORDER[i], ORDER[i - 1]];
+  } else if (b.dataset.down !== undefined) {
+    const i = +b.dataset.down; [ORDER[i + 1], ORDER[i]] = [ORDER[i], ORDER[i + 1]];
+  } else if (b.dataset.sit !== undefined) {
+    const j = +b.dataset.sit;
+    SITTING.has(j) ? SITTING.delete(j) : SITTING.add(j);
+  }
+  renderLineup();
+});
+
+(function mountLineupScope() {
+  const el = document.getElementById("lineup-scope");
+  const opts = [["all", "All games"]].concat(MIXED ? [["counts", "Counting only"]] : []);
+  if (opts.length > 1) {
+    el.innerHTML = opts.map(([v, t], i) =>
+      `<button type="button" data-v="${v}" aria-pressed="${i === 0}">${t}</button>`).join("");
+    el.addEventListener("click", e => {
+      const b = e.target.closest("button"); if (!b) return;
+      [...el.querySelectorAll("button")].forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+      LSCOPE = b.dataset.v; ORDER = null; renderLineup();
+    });
+  }
+})();
+document.getElementById("lineup-note").textContent =
+  `Reorder with the arrows, bench anyone with "sit". Projection updates as you go.`;
+renderLineup();
 
 mountFilter(document.getElementById("filter-bat"), renderBat);
 mountFilter(document.getElementById("filter-pit"), renderPit);
