@@ -92,6 +92,18 @@
     background: var(--brand); border-color: var(--brand); color: #fff; font-weight: 600; }
   .filter button:focus-visible { outline: 2px solid var(--royal); outline-offset: 2px; }
 
+  .pick { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0 0 0.9rem; }
+  .pick label { color: var(--dim); font-size: 0.82rem; }
+  .pick select {
+    font: inherit; font-size: 0.86rem; color: var(--chalk); background: var(--panel);
+    border: 1px solid var(--rule); padding: 0.36rem 0.6rem; max-width: 100%;
+    font-variant-numeric: tabular-nums; }
+  .pick select:hover { border-color: var(--dim); }
+  .pick select:focus-visible { outline: 2px solid var(--royal); outline-offset: 1px; }
+  .pick optgroup { background: var(--ink); color: var(--dim); font-style: normal; }
+  .pick option { background: var(--panel); color: var(--chalk); }
+  .pick .count { color: var(--dim); font-size: 0.8rem; }
+
   .scroll { overflow-x: auto; }
   table.stat { width: 100%; border-collapse: collapse; font-size: 0.9rem; min-width: 42rem; }
   table.stat th, table.stat td { padding: 0.4rem 0.5rem; text-align: right; white-space: nowrap; }
@@ -140,7 +152,7 @@
     <img src="logo.png" alt="Lady Dukes WPA 2033 club mark" width="512" height="512">
     <div>
       <h1>Lady Dukes WPA 2033</h1>
-      <div class="season">2026-09-06</div>
+      <div class="season">Fall 2026</div>
     </div>
   </div>
   <nav id="tabs"></nav>
@@ -161,13 +173,13 @@
 
 <section id="tab-batting" hidden>
   <h2>Batting</h2>
-  <div class="filter" id="filter-bat"></div>
+  <div class="pick" id="filter-bat"></div>
   <div class="scroll"><table class="stat" id="bat"></table></div>
 </section>
 
 <section id="tab-pitching" hidden>
   <h2>Pitching</h2>
-  <div class="filter" id="filter-pit"></div>
+  <div class="pick" id="filter-pit"></div>
   <div class="scroll"><table class="stat" id="pit"></table></div>
 </section>
 
@@ -247,7 +259,9 @@ document.getElementById("tally").innerHTML = [
 const exh = allMine.length - counting.length;
 document.getElementById("trend-note").textContent = SCOPE === "counts"
   ? `${counting.length} counting game${counting.length === 1 ? "" : "s"}. ${exh} scrimmage${exh === 1 ? "" : "s"} set aside.`
-  : `All ${allMine.length} games${exh ? `, including ${exh} scrimmage${exh === 1 ? "" : "s"} \u2014 hollow markers below` : ""}.`;
+  : `All ${allMine.length} games${exh ? `, including ${exh} scrimmage${exh === 1 ? "" : "s"}` : ""}` +
+    (exh && allMine.length <= 25 ? " \u2014 hollow markers below." :
+     allMine.length > 25 ? ". Charts show a 5-game rolling average over the raw line." : ".");
 }
 
 /* ---------------- charts ---------------- */
@@ -261,32 +275,58 @@ const axis = (lo, hi, fmt) =>
    <text x="0" y="${(py(hi, lo, hi) + 4).toFixed(1)}" fill="var(--dim)" font-size="9">${fmt(hi)}</text>
    <text x="0" y="${(py(lo, lo, hi) + 4).toFixed(1)}" fill="var(--dim)" font-size="9">${fmt(lo)}</text>`;
 
+const DENSE = 25;   /* games, past which raw per-game marks stop helping */
 const lineSeries = (vals, lo, hi, colour, exhFlags) => {
-  const pts = vals.map((v, i) => `${px(i, vals.length).toFixed(1)},${py(v, lo, hi).toFixed(1)}`);
+  const n = vals.length, dense = n > DENSE;
+  const path = v => v.map((x, i) => `${px(i, n).toFixed(1)},${py(x, lo, hi).toFixed(1)}`).join(" ");
+  if (dense) {
+    /* raw drops back to a faint trace; the rolling mean carries the story */
+    return `<polyline points="${path(vals)}" fill="none" stroke="${colour}"
+        stroke-width="1" opacity="0.28" stroke-linejoin="round"/>
+      <polyline points="${path(roll(vals, 5))}" fill="none" stroke="${colour}"
+        stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }
   const dots = vals.map((v, i) => {
     const hollow = exhFlags && exhFlags[i];
-    return `<circle cx="${px(i, vals.length).toFixed(1)}" cy="${py(v, lo, hi).toFixed(1)}"
+    return `<circle cx="${px(i, n).toFixed(1)}" cy="${py(v, lo, hi).toFixed(1)}"
       r="${hollow ? 3.1 : 2.6}" fill="${hollow ? "var(--ink)" : colour}"
       stroke="${colour}" stroke-width="${hollow ? 1.5 : 0}"/>`;
   }).join("");
-  return `<polyline points="${pts.join(" ")}" fill="none" stroke="${colour}" stroke-width="1.8"
+  return `<polyline points="${path(vals)}" fill="none" stroke="${colour}" stroke-width="1.8"
     stroke-linejoin="round" stroke-linecap="round"/>${dots}`;
 };
 
 const bars = (vals, hi, colour, exhFlags) => {
-  const n = vals.length, bw = Math.min(26, (W - PADL - 6) / n * 0.6);
+  const n = vals.length, dense = n > DENSE;
+  const bw = Math.max(1.2, Math.min(26, (W - PADL - 6) / n * (dense ? 0.9 : 0.6)));
   return vals.map((v, i) => {
     const x = px(i, n) - bw / 2, y = py(v, 0, hi), h = Math.max(1, H - PADB - y);
-    const hollow = exhFlags && exhFlags[i];
+    const hollow = !dense && exhFlags && exhFlags[i];
     return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}"
       height="${h.toFixed(1)}" fill="${hollow ? "none" : colour}"
+      opacity="${dense ? 0.75 : 1}"
       stroke="${colour}" stroke-width="${hollow ? 1.3 : 0}"/>`;
   }).join("");
 };
 
-const labels = (texts) => texts.map((s, i) =>
-  `<text x="${px(i, texts.length).toFixed(1)}" y="${H - 3}" fill="var(--dim)" font-size="9"
-    text-anchor="middle">${s}</text>`).join("");
+/* Past a handful of games one label per point turns into a grey smear, so
+   thin to roughly six evenly spaced ticks and always keep the last one. */
+const labels = (texts) => {
+  const n = texts.length, step = Math.max(1, Math.ceil(n / 6));
+  return texts.map((s, i) => {
+    if (i !== n - 1 && (i % step || n - 1 - i < step / 2)) return "";
+    const anchor = i === 0 ? "start" : i === n - 1 ? "end" : "middle";
+    const x = Math.min(Math.max(px(i, n), PADL), W);
+    return `<text x="${x.toFixed(1)}" y="${H - 3}" fill="var(--dim)" font-size="9"
+      text-anchor="${anchor}">${s}</text>`;
+  }).join("");
+};
+
+/* A k-game rolling mean. Per-game dots are the signal early and noise late. */
+const roll = (vals, k) => vals.map((_, i) => {
+  const a = vals.slice(Math.max(0, i - k + 1), i + 1);
+  return a.reduce((s, v) => s + v, 0) / a.length;
+});
 
 const card = (title, sub, inner, legend) =>
   `<div class="card"><h3>${title}</h3><div class="sub">${sub}</div>
@@ -320,6 +360,9 @@ function renderTrends() {
   const lab = gs.map(x => tick(x.g));
   const maxR = Math.max(3, ...gs.map(x => Math.max(x.g.R, x.g.RA)));
   const maxFree = Math.max(4, ...gs.map(x => x.bb + x.g.E));
+  /* A hot night can put team OBP over .600; a fixed ceiling clipped the line
+     clean off the canvas, which read as missing data rather than a good game. */
+  const maxOBP = Math.max(0.6, Math.ceil(Math.max(...gs.map(x => x.obp)) * 10) / 10);
 
   document.getElementById("trends").innerHTML = [
     card("Runs scored and allowed", "per game",
@@ -329,10 +372,11 @@ function renderTrends() {
         + labels(lab),
       `<div class="legend"><span><i style="background:var(--royal)"></i>scored</span>
         <span><i style="background:var(--seam)"></i>allowed</span>
-        ${flags.some(Boolean) ? `<span>hollow = scrimmage</span>` : ""}</div>`),
+        ${gs.length > 25 ? `<span>heavy line = 5-game average</span>`
+          : flags.some(Boolean) ? `<span>hollow = scrimmage</span>` : ""}</div>`),
     card("Team on-base", "OBP by game",
-      axis(0, 0.6, v => v.toFixed(2).replace(/^0/, ""))
-        + lineSeries(gs.map(x => x.obp), 0, 0.6, "var(--royal)", flags) + labels(lab)),
+      axis(0, maxOBP, v => v.toFixed(3).replace(/^0/, ""))
+        + lineSeries(gs.map(x => x.obp), 0, maxOBP, "var(--royal)", flags) + labels(lab)),
     card("Strike percentage", "of all pitches thrown",
       axis(0, 1, v => Math.round(v * 100) + "%")
         + lineSeries(gs.map(x => x.strikePct), 0, 1, "var(--royal)", flags) + labels(lab)),
@@ -388,16 +432,42 @@ const gameLabel = gid => {
   return `${me.result} ${me.R}\u2013${me.RA} ${short(them.team)}`;
 };
 function mountFilter(el, onPick) {
-  const opts = [["all", "All games"]]
-    .concat(MIXED ? [["counts", "Counting only"]] : [])
-    .concat(gameIds.map(g => [g, gameLabel(g)]));
-  el.innerHTML = opts.map(([v, t], i) =>
-    `<button type="button" data-v="${v}" aria-pressed="${i === 0}">${t}</button>`).join("");
-  el.addEventListener("click", e => {
-    const b = e.target.closest("button"); if (!b) return;
-    [...el.querySelectorAll("button")].forEach(x => x.setAttribute("aria-pressed", String(x === b)));
-    onPick(b.dataset.v);
+  /* A dropdown rather than a row of chips: at 100 games the chips wrap into a
+     wall. Games are newest first, grouped by month, since the game you want is
+     almost always the one you just played. */
+  const groups = {};
+  [...gameIds].reverse().forEach(gid => {
+    const g = byGame[gid].find(r => r.team === US);
+    const d = new Date(String(g.date) + "T12:00:00");
+    const key = d.toLocaleString("en-US", { month: "long", year: "numeric" });
+    (groups[key] = groups[key] || []).push({ gid, g, d });
   });
+  const opt = (v, t) => `<option value="${v}">${t}</option>`;
+  const html = [
+    opt("all", `All games (${gameIds.length})`),
+    MIXED ? opt("counts", `Counting only (${counting.length})`) : "",
+    ...Object.entries(groups).map(([month, list]) =>
+      `<optgroup label="${month}">${list.map(({ gid, g, d }) => {
+        const day = d.toLocaleString("en-US", { month: "short", day: "numeric" });
+        const them = byGame[gid].find(r => r.team !== US);
+        const ty = typeOf(gid);
+        return opt(gid, `${day} \u00b7 ${g.result} ${g.R}\u2013${g.RA} vs ${short(them.team)}` +
+                        (isExh(gid) ? " (scrim)" : ty ? ` (${ty})` : ""));
+      }).join("")}</optgroup>`),
+  ].join("");
+  el.innerHTML = `<label for="${el.id}-sel">Show</label>
+    <select id="${el.id}-sel">${html}</select>
+    <span class="count" id="${el.id}-count"></span>`;
+  const sel = el.querySelector("select");
+  const note = el.querySelector(".count");
+  const fire = () => {
+    const n = gameIds.filter(g => inScope(g, sel.value)).length;
+    note.textContent = sel.value === "all" || sel.value === "counts"
+      ? `${n} game${n === 1 ? "" : "s"}` : "";
+    onPick(sel.value);
+  };
+  sel.addEventListener("change", fire);
+  fire();
 }
 
 const inScope = (gid, scope) =>
@@ -645,7 +715,6 @@ renderLineup();
 
 mountFilter(document.getElementById("filter-bat"), renderBat);
 mountFilter(document.getElementById("filter-pit"), renderPit);
-renderBat("all"); renderPit("all");
 showTab(location.hash.slice(1));
 document.getElementById("foot").textContent =
   `${gameIds.length} games on file. Built ${D.built}.`;
